@@ -1,0 +1,266 @@
+---
+title: "DESeq2 R Notebook"
+params:
+   FDR: 0.05
+   LFC: 0.6
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+## General Setup 
+```{r include=FALSE}
+FDR.CUT <- params$FDR
+LFC.CUT <- params$LFC
+```
+
+### Load required packages 
+
+```{r package load, echo=TRUE, message=FALSE, warning=FALSE}
+library(edgeR)  
+library(EBSeq)
+library(DESeq2)
+library(goseq)
+library(seqsetvis)
+library(tidyverse)
+library(EnhancedVolcano)
+library(ggpubr)
+library(googledrive)
+library(knitr)
+
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/reactome.amnat.R')
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/GOamnat.R')
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/getFly.R')
+source('~/Documents/R-Projects/R_GlobalFunction/GoogleDrive_Functions.R')
+
+# optional saves auth token for google drive, run  prior to report render if you want to download files during report render, otherwise comment out drive downloads (will get rrror if files arent already present in working directory) 
+# drive_auth(cache = "~/.secrets")
+# 
+options(
+  gargle_oauth_cache = "~/.secrets",
+  gargle_oauth_email = TRUE
+)
+
+```
+
+### Read in count tables and sample data 
+
+```{r load counts}
+# Counts 
+drive_download(as_id('158y7x6PBsaGRO0dyLqTL7bnOuWuaCDXJ'), overwrite = T) # download count table
+Ogril.cnts <- read.delim("Ogril1_clean_count.txt", stringsAsFactors=FALSE)
+file.remove("Ogril1_clean_count.txt")
+
+colnames(Ogril.cnts)<- sub("X.gpfs.data.drand.O_grillus_genomic_resources.Bam_files_Ogril1_clean.","",colnames(Ogril.cnts))
+colnames(Ogril.cnts)<- sub(".bam","",colnames(Ogril.cnts))
+
+
+
+drive_download(as_id('1UknLwCJbrDXiSyoVsBa3V8RfVea7hI5G'), overwrite = T)
+geneinfo<- read.delim('Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt', stringsAsFactors=FALSE)
+file.remove('Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt')
+
+# rename columns to match cluster file names 
+colnames(Ogril.cnts)<- sub(".noHWD.bam","",colnames(Ogril.cnts))
+
+infection.status <- colnames(Ogril.cnts)
+infection.status<- str_extract(infection.status,pattern = 'uninf')
+infection.status[is.na(infection.status)] = 'inf'
+pdata = data.frame(colnames(Ogril.cnts), infection.status)
+```
+
+### Filtering counts 
+
+```{r filter counts}
+# New method, 
+keep <- filterByExpr(Ogril.cnts,group = infection.status)
+Ogril.cnts <- Ogril.cnts[keep,] 
+
+```
+
+
+## Main differential expression analysis
+
+### Contrasts
+
+```{r message=FALSE, warning=FALSE}
+# Create matrix of the counts for DESeq
+cnts <- as.matrix(Ogril.cnts) # set counts as matrix
+
+# create coldata and factorize variables
+pdata <- data.frame(colnames(Ogril.cnts), infection.status)
+
+# Set up DESeq Object
+dds <- DESeqDataSetFromMatrix(countData = cnts,
+                              colData = pdata,
+                              design = ~ 0 + infection.status )
+
+
+dds<- DESeq(dds) 
+resultsNames(dds)
+```
+
+
+
+##### DE between Infection Status 
+```{r warning=FALSE, paged.print=TRUE}
+resIf_DESeq2 <- results(dds,alpha=0.05,contrast = c('infection.status', 'inf', 'uninf'))  # specifiy contrasts manually
+#write to disk
+saveRDS(resIf_DESeq2, 'Rdata/resIf_DESeq2.RDS')
+
+DEtable_InfectionStatus_Genome_DESeq <- resIf_DESeq2 %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  dplyr::filter( padj <= FDR.CUT, abs(log2FoldChange) > LFC.CUT) %>%
+  dplyr::mutate(FlyOrhtolog = getFLY(PredictedGene)) %>%
+  dplyr::select(FlyOrhtolog, everything())
+
+DEtable_InfectionStatus_Genome_DESeq %>%
+  data.frame()
+
+# write to csv 
+
+DEtable_InfectionStatus_Genome_DESeq %>%
+  #write_csv('Tables/DEtable_InfectionStatus_Genome_DESeq.csv')
+upload_sheets('DEtable_InfectionStatus_Genome_DESeq', path = as_id('https://drive.google.com/open?id=1l-FTWGEgtXl8B7MD6V-iQZTrQhqmoqde'))
+
+```
+
+
+```{r warning=FALSE}
+
+
+EnhancedVolcano(resIf_DESeq2,
+                lab =getFLY(row.names(resIf_DESeq2)),
+                x = 'log2FoldChange',
+                subtitle = '',
+                caption = '',
+                gridlines.major=F,
+                gridlines.minor=F,
+                colAlpha = .3,
+                col=c("black", "black", "black", "red3"),
+                labSize = 1.5,
+                labCol = 'grey10',
+                legendPosition = 'none',pCutoff = 0.05,
+                title = 'DESeq2: Infected vs Uninfected',
+                y = 'padj')
+
+ggsave('InfectionStatus_Genome_DESeq.png', device = 'png', dpi = 300)
+upload_file('InfectionStatus_Genome_DESeq.png',path = as_id('https://drive.google.com/open?id=1qKn5sLGuNPvw0EhRQZVN-rAEwhiEHsAG'))
+```
+
+Gene Ontology
+
+Up Genes
+```{r }
+
+GO_upGenes_InfectionStatus_Genome_DESeq<- DEtable_InfectionStatus_Genome_DESeq %>%
+  dplyr::filter(padj <= FDR.CUT, log2FoldChange > LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat()
+
+GO_upGenes_InfectionStatus_Genome_DESeq %>%
+  data.frame()
+
+GO_upGenes_InfectionStatus_Genome_DESeq %>%
+  #write_csv('Tables/GO_upGenes_InfectionStatus_Genome_DESeq.csv')
+upload_sheets('GO_upGenes_InfectionStatus_Genome_DESeq', path = as_id('https://drive.google.com/open?id=1l-FTWGEgtXl8B7MD6V-iQZTrQhqmoqde'))
+
+```
+Down Genes
+
+```{r }
+
+GO_downGenes_InfectionStatus_Genome_DESeq <- DEtable_InfectionStatus_Genome_DESeq %>%
+  dplyr::filter(padj <= FDR.CUT, log2FoldChange < -1*LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat()
+
+
+GO_downGenes_InfectionStatus_Genome_DESeq %>%
+  data.frame()
+
+GO_downGenes_InfectionStatus_Genome_DESeq %>%
+  #write_csv('Tables/GO_downGenes_InfectionStatus_Genome_DESeq.csv')
+upload_sheets('GO_downGenes_InfectionStatus_Genome_DESeq', path = as_id('https://drive.google.com/open?id=1l-FTWGEgtXl8B7MD6V-iQZTrQhqmoqde'))
+```
+
+```{r fig.height=12, fig.width=8}
+colp <- c(up = 'darkred', down = 'darkblue')
+
+GO_downGenes_InfectionStatus_Genome_DESeq %>%
+  add_column(Direction = 'down') %>%
+  bind_rows(GO_upGenes_InfectionStatus_Genome_DESeq %>%
+              add_column(Direction = 'up'),
+             .id = 'direction') %>%
+  arrange(desc(over_represented_pvalue)) %>% 
+  #mutate(term = factor(term, levels = term)) %>%
+  
+  mutate(over_represented_pvalue = log10(over_represented_pvalue)) %>%
+    mutate(scaling = if_else(Direction == 'down',1,-1)) %>%
+    mutate(padj = over_represented_pvalue * scaling) %>%
+    arrange(desc(padj)) %>%
+
+    ggplot(aes(fct_reorder(term, padj), padj, fill = Direction)) +
+    geom_bar(stat = 'identity') +
+    scale_fill_manual(values = colp)+
+    ylab('log10 FDR')+ xlab('Ontology') +
+    coord_flip()+
+    ggtitle('DESeq: Gene Ontology') +
+    theme_pubr()
+
+ggsave('GO_InfectionStatus_Genome_DESeq.png', device = 'png', dpi = 300)
+upload_file('GO_InfectionStatus_Genome_DESeq.png',path = as_id('https://drive.google.com/open?id=1qKn5sLGuNPvw0EhRQZVN-rAEwhiEHsAG'))
+```
+
+```{r eval=FALSE, include=FALSE}
+GO_downGenes_InfectionStatus_Genome_DESeq %>%
+  add_column(Direction = 'down') %>%
+  bind_rows(GO_upGenes_InfectionStatus_Genome_DESeq %>%
+              add_column(Direction = 'up'),
+             .id = 'direction') %>%
+  arrange(desc(over_represented_pvalue)) %>%
+  mutate(padj = over_represented_pvalue) %>%
+  go.trim() -> slimmed
+ 
+slimmed
+
+slimmed %>%
+  #write_csv('Tables/GO_downGenes_InfectionStatus_Genome_DESeq.csv')
+upload_sheets('GO_slimmed_InfectionStatus_Genome_DESeq', path = as_id('https://drive.google.com/open?id=1l-FTWGEgtXl8B7MD6V-iQZTrQhqmoqde'))
+
+
+slimmed %>%
+  ggplot(aes(x = fct_reorder(Term, Count), y = Count )) +
+  geom_bar(stat = 'identity') +
+  xlab("Slimmed Ontology Terms")+
+  coord_flip() +
+  theme_pubr()
+
+ggsave('GO_slimmed_InfectionStatus_Genome_DESeq.png', device = 'png', dpi = 300)
+upload_file('GO_slimmed_InfectionStatus_Genome_DESeq.png',path = as_id('https://drive.google.com/open?id=1qKn5sLGuNPvw0EhRQZVN-rAEwhiEHsAG'))
+```
+
+
+```{r }
+
+ReactomeTable_InfectionStatus_Genome_DESeq<- DEtable_InfectionStatus_Genome_DESeq %>%
+  pull(PredictedGene) %>%
+  reactome.amnat() %>%
+  as.data.frame()
+
+ReactomeTable_InfectionStatus_Genome_DESeq
+
+ReactomeTable_InfectionStatus_Genome_DESeq %>%
+  #write_csv('Tables/ReactomeTable_InfectionStatus_Genome_DESeq.csv')
+upload_sheets('ReactomeTable_InfectionStatus_Genome_DESeq', path = as_id('https://drive.google.com/open?id=1l-FTWGEgtXl8B7MD6V-iQZTrQhqmoqde'))
+```
+
