@@ -1,0 +1,506 @@
+---
+title: "Sample Figures"
+params:
+   FDR: 0.05
+   LFC: 0.6
+output:
+  powerpoint_presentation:
+    reference_doc: /Users/shawnwilliams/Documents/R-Projects/Presentation/Templates/white_template_wide.pptx
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r include=FALSE}
+FDR.CUT <- params$FDR
+LFC.CUT <- params$LFC
+```
+
+```{r DataLoad, message=FALSE, warning=FALSE, include=FALSE}
+library(edgeR)  
+library(EBSeq)
+library(DESeq2)
+library(goseq)
+library(seqsetvis)
+library(tidyverse)
+library(EnhancedVolcano)
+library(ggpubr)
+library(googledrive)
+library(knitr)
+library(readxl)
+library("pheatmap")
+library(RColorBrewer)
+library(ggbiplot)
+
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/reactome.amnat.R')
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/GOamnat.R')
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/getFly.R')
+source('~/Documents/R-Projects/R_GlobalFunction/GoogleDrive_Functions.R')
+
+# optional saves auth token for google drive, run  prior to report render if you want to download files during report render, otherwise comment out drive downloads (will get rrror if files arent already present in working directory) 
+# drive_auth(cache = "~/.secrets")
+# 
+options(
+  gargle_oauth_cache = "~/.secrets",
+  gargle_oauth_email = TRUE
+)
+
+
+# Counts 
+drive_download(as_id('158y7x6PBsaGRO0dyLqTL7bnOuWuaCDXJ'), overwrite = T) # download count table
+Ogril.cnts <- read.delim("Ogril1_clean_count.txt", stringsAsFactors=FALSE)
+file.remove("Ogril1_clean_count.txt")
+
+colnames(Ogril.cnts)<- sub("X.gpfs.data.drand.O_grillus_genomic_resources.Bam_files_Ogril1_clean.","",colnames(Ogril.cnts))
+colnames(Ogril.cnts)<- sub(".bam","",colnames(Ogril.cnts))
+
+
+
+drive_download(as_id('1UknLwCJbrDXiSyoVsBa3V8RfVea7hI5G'), overwrite = T)
+geneinfo<- read.delim('Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt', stringsAsFactors=FALSE)
+file.remove('Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt')
+
+# rename columns to match cluster file names 
+colnames(Ogril.cnts)<- sub(".noHWD.bam","",colnames(Ogril.cnts))
+
+infection.status <- colnames(Ogril.cnts)
+infection.status<- str_extract(infection.status,pattern = 'uninf')
+infection.status[is.na(infection.status)] = 'inf'
+pdata = data.frame(colnames(Ogril.cnts), infection.status)
+
+# New method, 
+keep <- filterByExpr(Ogril.cnts,group = infection.status)
+Ogril.cnts <- Ogril.cnts[keep,] 
+
+resIf_DESeq2 <- readRDS("~/Documents/R-Projects/Amphipod-Analysis/DESeq2/Rdata/resIf_DESeq2.RDS")
+dds <- readRDS("~/Documents/R-Projects/Amphipod-Analysis/DESeq2/Rdata/dds.RDS")
+
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+infection.status <- colnames(assay(dds))
+infection.status<- str_extract(infection.status,pattern = 'uninf')
+infection.status[is.na(infection.status)] = 'inf'
+
+selected <-  resIf_DESeq2 %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  dplyr::filter( padj <= FDR.CUT, abs(log2FoldChange) > LFC.CUT) %>%
+  arrange(abs(log2FoldChange)) %>%
+  pull(PredictedGene)
+
+```
+
+## Varriance Stabilizing Transformation
+:::::::::::::: {.columns}
+::: {.column width="50%"}
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+vsd <- vst(dds,blind = F)
+
+# top 200 DE 
+vsd.pc.top <- prcomp(t(assay(vsd[selected[1:200]])))
+vsd.pc.top.PoV <- vsd.pc.top$sdev^2/sum(vsd.pc.top$sdev^2)
+names(vsd.pc.top.PoV) <- colnames(vsd.pc.top$x) 
+
+# all 
+vsd.pc.all <- prcomp(t(assay(vsd)))
+vsd.pc.all.PoV <- vsd.pc.all$sdev^2/sum(vsd.pc.all$sdev^2)
+names(vsd.pc.all.PoV) <- colnames(vsd.pc.all$x) 
+
+```
+
+```{r vsd.pc.top, echo=FALSE, message=FALSE, warning=FALSE}
+vsd.pc.top$x %>%
+  as_tibble(rownames = "Samples") %>%
+  add_column(`Infection Status` = infection.status) %>%
+  ggplot(aes(x =  PC1, y =  PC2 , color = `Infection Status`)) +
+  geom_point(shape = 16, size =3, alpha = .8)+
+
+  xlab(paste0(round(vsd.pc.top.PoV['PC1'],3)*100,
+       '% PC1'))+
+  ylab(paste0(round(vsd.pc.top.PoV['PC2'],3)*100,
+       '% PC2'))+
+  theme_pubr()+
+  ggtitle("Top 200 DE Genes Only")
+
+```
+
+```{r include=FALSE}
+# output files for paper 
+
+# top 100 DE 
+vsd.pc.top <- prcomp(t(assay(vsd[selected[1:100]])))
+vsd.pc.top.PoV <- vsd.pc.top$sdev^2/sum(vsd.pc.top$sdev^2)
+names(vsd.pc.top.PoV) <- colnames(vsd.pc.top$x) 
+
+
+vsd.pc.top$x %>%
+  as_tibble(rownames = "Samples") %>%
+  add_column(`Infection Status` = infection.status) %>%
+  ggplot(aes(x =  PC1, y =  PC2 , color = `Infection Status`)) +
+  geom_point(shape = 16, size =3, alpha = .8)+
+
+  xlab(paste0(round(vsd.pc.top.PoV['PC1'],3)*100,
+       '% PC1'))+
+  ylab(paste0(round(vsd.pc.top.PoV['PC2'],3)*100,
+       '% PC2'))+
+  theme_pubr()
+ggsave(filename = 'Figures/top100de_pca.pdf',device = 'pdf',width = 8 ,height = 6)
+
+# all DE (by FDR)
+vsd.pc.top <- prcomp(t(assay(vsd[selected])))
+vsd.pc.top.PoV <- vsd.pc.top$sdev^2/sum(vsd.pc.top$sdev^2)
+names(vsd.pc.top.PoV) <- colnames(vsd.pc.top$x) 
+
+
+vsd.pc.top$x %>%
+  as_tibble(rownames = "Samples") %>%
+  add_column(`Infection Status` = infection.status) %>%
+  ggplot(aes(x =  PC1, y =  PC2 , color = `Infection Status`)) +
+  geom_point(shape = 16, size =3, alpha = .8)+
+
+  xlab(paste0(round(vsd.pc.top.PoV['PC1'],3)*100,
+       '% PC1'))+
+  ylab(paste0(round(vsd.pc.top.PoV['PC2'],3)*100,
+       '% PC2'))+
+  theme_pubr()
+ggsave(filename = 'Figures/allde_pca.pdf',device = 'pdf',width = 8 ,height = 6)
+
+
+
+# all  genes 
+vsd.pc.all$x %>%
+  as_tibble(rownames = "Samples") %>%
+  add_column(`Infection Status` = infection.status) %>%
+  ggplot(aes(x =  PC1, y =  PC2 , color = `Infection Status`)) +
+  geom_point(shape = 16, size =3, alpha = .8)+
+
+  xlab(paste0(round(vsd.pc.all.PoV['PC1'],3)*100,
+       '% PC1'))+
+  ylab(paste0(round(vsd.pc.all.PoV['PC2'],3)*100,
+       '% PC2'))+
+  theme_pubr()
+ggsave(filename = 'Figures/all_pca.pdf',device = 'pdf',width = 8 ,height = 6)
+
+```
+
+:::
+::: {.column width="50%"}
+```{r vsd.pc.all, echo=FALSE, message=FALSE, warning=FALSE}
+vsd.pc.all$x %>%
+  as_tibble(rownames = "Samples") %>%
+  add_column(`Infection Status` = infection.status) %>%
+  ggplot(aes(x =  PC1, y =  PC2 , color = `Infection Status`)) +
+  geom_point(shape = 16, size =3, alpha = .8)+
+
+  xlab(paste0(round(vsd.pc.all.PoV['PC1'],3)*100,
+       '% PC1'))+
+  ylab(paste0(round(vsd.pc.all.PoV['PC2'],3)*100,
+       '% PC2'))+
+  theme_pubr()+
+  ggtitle("All Genes")
+
+```
+:::
+::::::::::::::
+
+
+## Logarithmic 
+:::::::::::::: {.columns}
+::: {.column width="50%"}
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+rl <- rlog(dds,blind = F)
+
+# top 200 DE 
+rl.pc.top <- prcomp(t(assay(rl[selected[1:200]])))
+rl.pc.top.PoV <- rl.pc.top$sdev^2/sum(rl.pc.top$sdev^2)
+names(rl.pc.top.PoV) <- colnames(rl.pc.top$x) 
+
+# all 
+rl.pc.all <- prcomp(t(assay(rl)))
+rl.pc.all.PoV <- rl.pc.all$sdev^2/sum(rl.pc.all$sdev^2)
+names(rl.pc.all.PoV) <- colnames(rl.pc.all$x) 
+
+```
+
+```{r rl.pc.top, echo=FALSE, message=FALSE, warning=FALSE}
+rl.pc.top$x %>%
+  as_tibble(rownames = "Samples") %>%
+  add_column(`Infection Status` = infection.status) %>%
+  ggplot(aes(x =  PC1, y =  PC2 , color = `Infection Status`)) +
+  geom_point(shape = 16, size =3, alpha = .8)+
+
+  xlab(paste0(round(rl.pc.top.PoV['PC1'],3)*100,
+       '% PC1'))+
+  ylab(paste0(round(rl.pc.top.PoV['PC2'],3)*100,
+       '% PC2'))+
+  theme_pubr()+
+  ggtitle("Top 200 DE Genes Only")
+
+```
+:::
+::: {.column width="50%"}
+```{r rl.pc.all, echo=FALSE, message=FALSE, warning=FALSE}
+rl.pc.all$x %>%
+  as_tibble(rownames = "Samples") %>%
+  add_column(`Infection Status` = infection.status) %>%
+  ggplot(aes(x =  PC1, y =  PC2 , color = `Infection Status`)) +
+  geom_point(shape = 16, size =3, alpha = .8)+
+
+  xlab(paste0(round(rl.pc.all.PoV['PC1'],3)*100,
+       '% PC1'))+
+  ylab(paste0(round(rl.pc.all.PoV['PC2'],3)*100,
+       '% PC2'))+
+  theme_pubr()+
+  ggtitle("All Genes")
+
+```
+:::
+::::::::::::::
+
+
+# Differential Expression 
+## Volcano Plot 
+
+```{r echo=FALSE, fig.height=8, fig.width=14, message=FALSE, warning=FALSE}
+DE_InfectionStatus_Genome_DESeq <- resIf_DESeq2 %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  #dplyr::filter( padj <= FDR.CUT, abs(log2FoldChange) > LFC.CUT) %>%
+  dplyr::mutate(FlyOrhtolog = getFLY(PredictedGene)) %>%
+  dplyr::select(FlyOrhtolog, everything())
+
+DE_InfectionStatus_Genome_DESeq %>%
+  ggplot(aes(log2FoldChange, y= - log10(padj), color = if_else(condition = (padj <= FDR.CUT & abs(log2FoldChange) > LFC.CUT),
+                             true = 'darkblue', false = 'black'))) +
+  geom_point(shape = 16, alpha = .8, size = 4) +
+  scale_color_manual(values = c('grey10','red3'))+
+  geom_vline(xintercept = c(-.6,.6), linetype = 'dashed', color = 'black')+
+  geom_hline(yintercept = -log10(.05), linetype = 'dashed', color = 'black')+
+  ylab('log10 FDR')+
+  xlab('log2 Fold Change')+
+  theme_pubr()+
+  theme(legend.position = 'none')
+
+ggsave(filename = 'Figures/DESeqVolcano.pdf',device = 'pdf',width = 8 ,height = 6)
+```
+
+## Gene Ontology 
+
+```{r echo=FALSE,fig.height=8, fig.width=14, message=FALSE, warning=FALSE}
+
+DEtable_InfectionStatus_Genome_DESeq <- resIf_DESeq2 %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  dplyr::filter( padj <= FDR.CUT, abs(log2FoldChange) > LFC.CUT) %>%
+  dplyr::mutate(FlyOrhtolog = getFLY(PredictedGene)) %>%
+  dplyr::select(FlyOrhtolog, everything())
+
+# Up Genes
+GO_upGenes_InfectionStatus_Genome_DESeq<- DEtable_InfectionStatus_Genome_DESeq %>%
+  dplyr::filter(padj <= FDR.CUT, log2FoldChange > LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat() %>%
+  as_tibble() 
+
+# Down Genes
+GO_downGenes_InfectionStatus_Genome_DESeq <- DEtable_InfectionStatus_Genome_DESeq %>%
+  dplyr::filter(padj <= FDR.CUT, log2FoldChange < -1*LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat() %>%
+  as_tibble() 
+
+
+colp <- c(up = 'darkred', down = 'darkblue')
+
+GO_downGenes_InfectionStatus_Genome_DESeq %>%
+  add_column(Direction = 'down') %>%
+  bind_rows(GO_upGenes_InfectionStatus_Genome_DESeq %>%
+              add_column(Direction = 'up'),
+            .id = 'direction') %>%
+  
+  mutate(over_represented_pvalue = log10(over_represented_pvalue)) %>%
+  mutate(scaling = if_else(Direction == 'down',1,-1)) %>%
+  mutate(padj = over_represented_pvalue * scaling) %>%
+  arrange(desc(padj)) %>%
+  
+  ggplot(aes(fct_reorder(term, padj), padj, fill = Direction)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(values = colp)+
+  ylab('log10 FDR')+ xlab('Ontology') +
+  coord_flip()+
+  
+  # ggtitle('DESeq: Gene Ontology') +
+  theme_pubr()+
+  scale_y_continuous(labels = c('7.5','5','2.5','0','2.5','5'), breaks = c(-7.5, -5, -2.5, 0, 2.5,5))
+
+
+ggsave(filename = 'Figures/DESeqGO.pdf',device = 'pdf',width = 8 ,height = 6)
+```
+
+
+## V-ATPases 
+### Sample Plot 
+Other ways to plot this, ways to handle multiple predicted genes having same annotation
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# read in saved tables 
+drive_download(as_id('19fbhXXHxcZxxstZOCZw-vA76lrNQ_HOvifXInQ3YsPs'), overwrite = T) # download count table
+Vatpase <- read_excel('V-ATPase.xlsx')
+file.remove('V-ATPase.xlsx')
+
+v.indx <- grep(pattern = 'Vha', x = DE_InfectionStatus_Genome_DESeq$FlyOrhtolog)
+v.name <- DE_InfectionStatus_Genome_DESeq$PredictedGene[v.indx ]
+
+
+
+
+mat_colors <- colorRampPalette(c("blue", "grey90", "red"))
+
+df <- as.data.frame(colData(dds)[,c("infection.status")])
+row.names(df) <- colnames(dds)
+
+
+ord<- c(which(df$`colData(dds)[, c("infection.status")]` =='uninf'),
+which(df$`colData(dds)[, c("infection.status")]` =='inf'))
+
+
+lab.row <- data.frame(Symbol = row.names(assay(vsd)[v.name,ord])) %>%
+  mutate(Symbol = getFLY(Symbol))
+
+
+
+df.row = as.data.frame(Vatpase[match(lab.row$Symbol,str_replace(Vatpase$Genes,'v','V')),'Subunit'])
+row.names(df.row) <- row.names(assay(vsd)[v.name,ord])
+
+v.name <- v.name[order(df.row$Subunit)]
+
+mat.in <- assay(vsd)[v.name,ord]
+row.names(mat.in) <- row.names(assay(vsd)[v.name,ord])
+
+
+lab.row <- data.frame(Symbol = row.names(assay(vsd)[v.name,ord])) %>%
+  mutate(Symbol = getFLY(Symbol))
+
+
+colnames(df) <- "Infection Status"
+
+a.cols = list(`Infection Status` = c('darkgreen', 'orange'),
+             Subunit = brewer.pal(7, "Dark2") )
+
+names(a.cols$`Infection Status`) = c('inf', 'uninf')
+names(a.cols$Subunit) <- unique(df.row$Subunit)
+
+
+lbs <- paste0(row.names(df.row), ' (',lab.row$Symbol,')')
+
+```
+
+```{r fig.height=8, fig.width=14, message=FALSE, warning=FALSE, paged.print=TRUE}
+
+#pdf('Figures/Vatpase_Heatmap.pdf')
+pheatmap(mat.in, cluster_rows=FALSE, show_rownames=TRUE, show_colnames = FALSE, 
+         labels_row = lbs ,cluster_cols=FALSE, annotation_col=df, 
+         scale = 'row', color =mat_colors(300), annotation_row = df.row,
+         annotation_colors =a.cols,border_color = NA,
+         cluster_row=TRUE,fontsize = 16,  gaps_col=24, gaps_row = c(6,7:10,11))
+
+grid.text(c('uninfected','infected'), x=c(0.18,0.5),y=c(.975,.975), gp=gpar(fontsize=14, col = 'white', fontface = 'bold'))
+grid.text(c('H','c*','D','C','B','d','a'), x=rep(.015,7),y=c(.175,.28,.34,.4,.47,.53,.75), gp=gpar(fontsize=14, col = 'white', fontface = 'bold'))
+
+#dev.off()
+# 
+# vst.long <- mat.in %>%
+#   data.frame() %>%
+#   as_tibble(rownames = 'Samples') %>%
+#   add_column(`Infection Status` = infection.status) %>%
+#  gather(key = 'Samples', value = 'VST' )
+# 
+# vst.long %>%
+#   ggplot(aes(x = Samples, y = VST)) +
+#   geom_boxplot()
+```
+
+## Overlap of Methods
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+drive_download(as_id('1gvrQ2u_p04_E3KmV0aXImJRiENlmX3IkNVZjju--Uok'), overwrite = T) # download count table
+DEtable_InfectionStatus_Genome_DESeq <- read_excel('DEtable_InfectionStatus_Genome_DESeq.xlsx')
+file.remove('DEtable_InfectionStatus_Genome_DESeq.xlsx')
+
+
+drive_download(as_id('1N07lSDQIeD9v78lV5cXeW-ev27-WhmJLWiQSPsKafdc'), overwrite = T) # download count table
+DEtable_InfectionStatus_Genome_edgeR <- read_excel('DEtable_InfectionStatus_Genome_edgeR.xlsx')
+file.remove('DEtable_InfectionStatus_Genome_edgeR.xlsx')
+
+drive_download(as_id('107GctPvQYTx5kFVxtqwA6DxXiQqnzr41SPASsPDW27c'), overwrite = T) # download count table
+DEtable_InfectionStatus_Genome_EBSeq <- read_excel('DEtable_InfectionStatus_Genome_EBSeq.xlsx')
+file.remove('DEtable_InfectionStatus_Genome_EBSeq.xlsx')
+
+overlap.list.InfectionStatus = list(pull(DEtable_InfectionStatus_Genome_DESeq,'PredictedGene'),
+                                    pull(DEtable_InfectionStatus_Genome_edgeR,'PredictedGene'),
+                                    pull(DEtable_InfectionStatus_Genome_EBSeq,'PredictedGene'))
+
+
+names(overlap.list.InfectionStatus) = c('DESeq2','edgeR','EBSeq')
+overlap.InfectionStatus <- ssvMakeMembTable(overlap.list.InfectionStatus)
+
+
+ssvFeatureVenn(overlap.InfectionStatus,circle_colors =c("red3",'goldenrod','darkgreen'),
+               fill_alpha=.4,
+               line_alpha=0)
+
+```
+
+## GO overlap 
+
+```{r echo=FALSE,fig.height=8, fig.width=14, message=FALSE, warning=FALSE}
+ol3 <- row.names(overlap.InfectionStatus)[rowSums(overlap.InfectionStatus) >= 2] 
+ 
+DEtable_InfectionStatus_Genome_DESeq <- resIf_DESeq2 %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  filter(PredictedGene %in% ol3) %>%
+  dplyr::filter( padj <= FDR.CUT, abs(log2FoldChange) > LFC.CUT) %>%
+  dplyr::mutate(FlyOrhtolog = getFLY(PredictedGene)) %>%
+  dplyr::select(FlyOrhtolog, everything())
+
+# Up Genes
+GO_upGenes_InfectionStatus_Genome_DESeq<- DEtable_InfectionStatus_Genome_DESeq %>%
+  dplyr::filter(padj <= FDR.CUT, log2FoldChange > LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat() %>%
+  as_tibble() 
+
+# Down Genes
+GO_downGenes_InfectionStatus_Genome_DESeq <- DEtable_InfectionStatus_Genome_DESeq %>%
+  dplyr::filter(padj <= FDR.CUT, log2FoldChange < -1*LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat() %>%
+  as_tibble() 
+
+
+colp <- c(up = 'darkred', down = 'darkblue')
+
+GO_downGenes_InfectionStatus_Genome_DESeq %>%
+  add_column(Direction = 'down') %>%
+  bind_rows(GO_upGenes_InfectionStatus_Genome_DESeq %>%
+              add_column(Direction = 'up'),
+            .id = 'direction') %>%
+  
+  mutate(over_represented_pvalue = log10(over_represented_pvalue)) %>%
+  mutate(scaling = if_else(Direction == 'down',1,-1)) %>%
+  mutate(padj = over_represented_pvalue * scaling) %>%
+  arrange(desc(padj)) %>%
+  
+  ggplot(aes(fct_reorder(term, padj), padj, fill = Direction)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(values = colp)+
+  ylab('log10 FDR')+ xlab('Ontology') +
+  coord_flip()+
+  # ggtitle('DESeq: Gene Ontology') +
+  theme_pubr()
+
+```
+
+ 
+
+
