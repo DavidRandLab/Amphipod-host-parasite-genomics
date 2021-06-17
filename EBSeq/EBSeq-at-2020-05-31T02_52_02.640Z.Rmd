@@ -1,0 +1,295 @@
+---
+title: "EBSeq"
+params:
+  FDR: 0.05
+  LFC: 0.6
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+## General Setup 
+```{r include=FALSE}
+FDR.CUT <- params$FDR
+LFC.CUT <- params$LFC
+```
+
+### Load required packages 
+
+```{r package load, echo=TRUE, message=FALSE, warning=FALSE}
+library(edgeR)  
+library(EBSeq)
+library(DESeq2)
+library(goseq)
+library(seqsetvis)
+library(tidyverse)
+library(EnhancedVolcano)
+library(ggpubr)
+library(googledrive)
+library(knitr)
+
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/reactome.amnat.R')
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/GOamnat.R')
+source('~/Documents/R-Projects/Amphipod-Analysis/Functions/getFly.R')
+source('~/Documents/R-Projects/R_GlobalFunction/GoogleDrive_Functions.R')
+
+# optional saves auth token for google drive, run  prior to report render if you want to download files during report render, otherwise comment out drive downloads (will get rrror if files arent already present in working directory) 
+# drive_auth(cache = "~/.secrets")
+# 
+options(
+  gargle_oauth_cache = "~/.secrets",
+  gargle_oauth_email = TRUE
+)
+
+```
+
+
+### Read in count tables and sample data 
+
+```{r load counts}
+# Counts 
+drive_download(as_id('158y7x6PBsaGRO0dyLqTL7bnOuWuaCDXJ'), overwrite = T) # download count table
+Ogril.cnts <- read.delim("Ogril1_clean_count.txt", stringsAsFactors=FALSE)
+file.remove('Ogril1_clean_count.txt')
+
+colnames(Ogril.cnts)<- sub("X.gpfs.data.drand.O_grillus_genomic_resources.Bam_files_Ogril1_clean.","",colnames(Ogril.cnts))
+colnames(Ogril.cnts)<- sub(".bam","",colnames(Ogril.cnts))
+
+
+drive_download(as_id('1UknLwCJbrDXiSyoVsBa3V8RfVea7hI5G'), overwrite = T)
+geneinfo<- read.delim('Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt', stringsAsFactors=FALSE)
+file.remove('Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt')
+
+# rename columns to match cluster file names 
+colnames(Ogril.cnts)<- sub(".noHWD.bam","",colnames(Ogril.cnts))
+
+infection.status <- colnames(Ogril.cnts)
+infection.status<- str_extract(infection.status,pattern = 'uninf')
+infection.status[is.na(infection.status)] = 'inf'
+
+pdata = data.frame(colnames(Ogril.cnts), infection.status)
+```
+
+### Filtering counts 
+
+```{r filter counts}
+# New method, 
+keep <- filterByExpr(Ogril.cnts,group = infection.status)
+Ogril.cnts <- Ogril.cnts[keep,] 
+
+```
+
+
+##### DE between Infection Status 
+```{r echo=TRUE, warning=FALSE, paged.print=TRUE}
+
+Sizes = MedianNorm(as.matrix(Ogril.cnts)) # use Median normalization    
+Cond <- as.factor(pdata$infection.status)# we are subsetting based on infection status
+
+
+EBOut = EBTest(Data = as.matrix(Ogril.cnts),Conditions = factor(infection.status), sizeFactors = Sizes, maxround = 10)
+ResG = GetDEResults(EBOut) 
+fc.G <- PostFC(EBOut)
+fc.G <- unlist(fc.G$PostFC,use.names = F)
+
+
+
+DEgenes_InfectionStatus_Genome_EBSeq <- ResG$DEfound
+DE_InfectionStatus_Genome_EBSeq <- ResG$PPMat
+DE_InfectionStatus_Genome_EBSeq <- DE_InfectionStatus_Genome_EBSeq[DEgenes_InfectionStatus_Genome_EBSeq,]
+
+# Get LFC values from list structure
+df.G <- data.frame(matrix(unlist(fc.G), nrow=length(fc.G), byrow=T))
+row.names(df.G) <- row.names(Ogril.cnts)
+colnames(df.G) <- "EBseq.FC"
+
+# add FC values
+DE_InfectionStatus_Genome_EBSeq <- cbind(DE_InfectionStatus_Genome_EBSeq,df.G[DEgenes_InfectionStatus_Genome_EBSeq,1])
+colnames(DE_InfectionStatus_Genome_EBSeq) <- c("PPEE","PPDE","EBseq.FC") 
+
+
+
+DEtable_InfectionStatus_Genome_EBSeq <- DE_InfectionStatus_Genome_EBSeq %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  dplyr::filter( PPDE >= 0.95) %>%
+  dplyr::mutate(EBseq.FC = log2(EBseq.FC)) %>%
+  dplyr::mutate(FlyOrhtolog = getFLY(PredictedGene)) %>%
+  dplyr::select(FlyOrhtolog, everything())
+
+
+DEtable_InfectionStatus_Genome_EBSeq %>%
+  data.frame()
+
+## make complete table
+res.table <- ResG$PPMat %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  left_join(df.G %>%
+              as_tibble(rownames = 'PredictedGene')) %>%
+  dplyr::mutate(EBseq.FC = log2(EBseq.FC)) %>%
+  dplyr::mutate(FlyOrhtolog = getFLY(PredictedGene)) %>%
+  dplyr::select(FlyOrhtolog, everything())
+
+
+
+
+ DEtable_InfectionStatus_Genome_EBSeq %>%
+  # write_csv('Tables/DEtable_InfectionStatus_Genome_EBSeq.csv')
+upload_sheets('DEtable_InfectionStatus_Genome_EBSeq', path = as_id('https://drive.google.com/open?id=1BvPFOINxJ4GqaczfWxol_nq0MLk0zz49'))
+
+```
+
+```{r echo=TRUE, warning=FALSE}
+
+res.table <- ResG$PPMat %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  left_join(df.G %>%
+              as_tibble(rownames = 'PredictedGene')) %>%
+  dplyr::mutate(EBseq.FC = log2(EBseq.FC)) %>%
+  dplyr::mutate(FlyOrhtolog = getFLY(PredictedGene)) %>%
+  dplyr::select(FlyOrhtolog, everything())
+ 
+saveRDS(res.table,'Rdata/resIf_EBSeq.RDS')
+
+EnhancedVolcano(res.table,
+                lab = res.table$FlyOrhtolog,
+                x = 'EBseq.FC',
+                subtitle = '',
+                caption = '',
+                gridlines.major=F,
+                gridlines.minor=F,
+                colAlpha = .3,
+                col=c("black", "black", "black", "darkgreen"),
+                labSize = 1.5,
+                labCol = 'grey10',
+                legendPosition = 'none',pCutoff = 0.05,
+                title = 'EBSeq: Infected vs Uninfected',
+                y = 'PPEE')
+
+ggsave('InfectionStatus_Genome_EBSeq.png', device = 'png', dpi = 300)
+upload_file('InfectionStatus_Genome_EBSeq.png',path = as_id('https://drive.google.com/open?id=1wXLTnsLV9bJV2WDGzLs_zA21K4ppKIXv'))
+```
+
+
+
+Gene Ontology
+
+Up Genes
+```{r echo=TRUE}
+
+GO_upGenes_InfectionStatus_Genome_EBSeq<- DEtable_InfectionStatus_Genome_EBSeq %>%
+  dplyr::filter(PPEE<= FDR.CUT, EBseq.FC > LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat()
+
+GO_upGenes_InfectionStatus_Genome_EBSeq %>%
+  data.frame()
+
+GO_upGenes_InfectionStatus_Genome_EBSeq %>%
+  #write_csv('Tables/GO_upGenes_InfectionStatus_Genome_EBSeq.csv')
+upload_sheets('GO_upGenes_InfectionStatus_Genome_EBSeq', path = as_id('https://drive.google.com/open?id=1BvPFOINxJ4GqaczfWxol_nq0MLk0zz49'))
+
+```
+Down Genes
+
+```{r echo=TRUE}
+
+GO_downGenes_InfectionStatus_Genome_EBSeq <- DEtable_InfectionStatus_Genome_EBSeq %>%
+  dplyr::filter(PPEE <= FDR.CUT, EBseq.FC < -1 * LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat()
+
+
+GO_downGenes_InfectionStatus_Genome_EBSeq %>%
+  data.frame()
+
+GO_downGenes_InfectionStatus_Genome_EBSeq %>%
+  #write_csv('Tables/GO_downGenes_InfectionStatus_Genome_EBSeq.csv')
+upload_sheets('GO_downGenes_InfectionStatus_Genome_EBSeq', path = as_id('https://drive.google.com/open?id=1BvPFOINxJ4GqaczfWxol_nq0MLk0zz49'))
+
+```
+
+```{r echo=TRUE}
+
+colp <- c(up = 'darkred', down = 'darkblue')
+
+GO_downGenes_InfectionStatus_Genome_EBSeq %>%
+  add_column(Direction = 'down') %>%
+  bind_rows(GO_upGenes_InfectionStatus_Genome_EBSeq %>%
+              add_column(Direction = 'up'),
+             .id = 'direction') %>%
+  arrange(desc(over_represented_pvalue)) %>% 
+  mutate(term = factor(term, levels = term)) %>%
+  
+  mutate(over_represented_pvalue = log10(over_represented_pvalue)) %>%
+    mutate(scaling = if_else(Direction == 'down',1,-1)) %>%
+    mutate(padj = over_represented_pvalue * scaling) %>%
+    arrange(desc(padj)) %>%
+
+    ggplot(aes(fct_reorder(term, padj), padj, fill = Direction)) +
+    geom_bar(stat = 'identity') +
+    scale_fill_manual(values = colp)+
+    ylab('log10 FDR')+ xlab('Ontology') +
+    coord_flip()+
+    ggtitle('EBSeq: Gene Ontology') +
+    theme_pubr()
+
+ggsave('GO_InfectionStatus_Genome_EBSeq.png', device = 'png', dpi = 300)
+upload_file('GO_InfectionStatus_Genome_EBSeq.png',path = as_id('https://drive.google.com/open?id=1wXLTnsLV9bJV2WDGzLs_zA21K4ppKIXv'))
+```
+
+
+```{r }
+
+ReactomeTable_InfectionStatus_Genome_EBSeq<- DEtable_InfectionStatus_Genome_EBSeq %>%
+  pull(PredictedGene) %>%
+  reactome.amnat() %>%
+  as.data.frame()
+
+ReactomeTable_InfectionStatus_Genome_EBSeq
+
+ReactomeTable_InfectionStatus_Genome_EBSeq %>%
+  #write_csv('Tables/ReactomeTable_InfectionStatus_Genome_EBSeq.csv')
+ upload_sheets('ReactomeTable_InfectionStatus_Genome_EBSeq', path = as_id('https://drive.google.com/open?id=1BvPFOINxJ4GqaczfWxol_nq0MLk0zz49'))
+ 
+
+```
+
+
+
+```{r eval=FALSE, include=FALSE}
+GO_downGenes_InfectionStatus_Genome_EBSeq %>%
+  add_column(Direction = 'down') %>%
+  bind_rows(GO_upGenes_InfectionStatus_Genome_EBSeq %>%
+              add_column(Direction = 'up'),
+             .id = 'direction') %>%
+  arrange(desc(over_represented_pvalue)) %>%
+  mutate(padj = over_represented_pvalue) %>%
+  go.trim() -> slimmed
+ 
+slimmed
+
+slimmed %>%
+  #write_csv('Tables/GO_downGenes_InfectionStatus_Genome_EBSeq.csv')
+upload_sheets('GO_slimmed_InfectionStatus_Genome_EBSeq', path = as_id('https://drive.google.com/open?id=1l-FTWGEgtXl8B7MD6V-iQZTrQhqmoqde'))
+
+
+slimmed %>%
+  ggplot(aes(x = fct_reorder(Term, Count), y = Count )) +
+  geom_bar(stat = 'identity') +
+  xlab("Slimmed Ontology Terms")+
+  coord_flip() +
+  theme_pubr()
+
+ggsave('GO_slimmed_InfectionStatus_Genome_EBSeq.png', device = 'png', dpi = 300)
+upload_file('GO_slimmed_InfectionStatus_Genome_EBSeq.png',path = as_id('https://drive.google.com/open?id=1qKn5sLGuNPvw0EhRQZVN-rAEwhiEHsAG'))
+```
+
