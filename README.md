@@ -24,4 +24,3 @@ Older versions of these scripts are in the DE_Analysis folder.
 
 The Figures folder contains code for generating some of the figures; other figures are generated in the individual R scripts for differential expression.
 
-![image](https://user-images.githubusercontent.com/3761093/229312411-4c5ef16d-681c-4947-92d9-abf20c03a727.png)
