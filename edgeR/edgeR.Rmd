@@ -1,0 +1,280 @@
+---
+title: "edgeR R Notebook"
+params:
+   FDR: 0.05
+   LFC: 0.6
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+## General Setup 
+```{r include=FALSE}
+FDR.CUT <- params$FDR
+LFC.CUT <- params$LFC
+setwd("/Users/davidrand/Dropbox (Brown)/Teaching/Grad Seminar/Ecological and Evolutionary Genomics 2019/Amphipod paper/edgeR_2023_redo")
+```
+
+
+### Load required packages 
+
+```{r package load, echo=TRUE, message=FALSE, warning=FALSE}
+library(edgeR)  
+library(EBSeq)
+library(DESeq2)
+library(goseq)
+library(seqsetvis)
+library(tidyverse)
+library(EnhancedVolcano)
+library(ggpubr)
+library(googledrive)
+library(knitr)
+
+#source('~/Documents/R-Projects/Amphipod-Analysis/Functions/reactome.amnat.R')
+source("https://raw.githubusercontent.com/DavidRandLab/Amphipod-host-parasite-genomics/main/Functions/reactome.amnat.R")
+#source('~/Documents/R-Projects/Amphipod-Analysis/Functions/GOamnat.R')
+source("https://raw.githubusercontent.com/DavidRandLab/Amphipod-host-parasite-genomics/main/Functions/GOamnat.R")
+#source('~/Documents/R-Projects/Amphipod-Analysis/Functions/getFly.R')
+source("https://raw.githubusercontent.com/DavidRandLab/Amphipod-host-parasite-genomics/main/Functions/getFly.R")
+#source('~/Documents/R-Projects/R_GlobalFunction/GoogleDrive_Functions.R')
+
+# optional saves auth token for google drive, run  prior to report render if you want to download files during report render, otherwise comment out drive downloads (will get error if files aren't already present in working directory) 
+# drive_auth(cache = "~/.secrets")
+# 
+options(
+  gargle_oauth_cache = "~/.secrets",
+  gargle_oauth_email = TRUE
+)
+
+```
+
+### Read in count tables and sample data 
+
+```{r load counts}
+#GitHub link to main read count table "Ogril1_clean_count.txt" as raw text file:
+#https://raw.githubusercontent.com/DavidRandLab/Amphipod-host-parasite-genomics/main/Ogril1_clean_count.txt
+
+Ogril.cnts <- read.delim("https://raw.githubusercontent.com/DavidRandLab/Amphipod-host-parasite-genomics/main/Ogril1_clean_count.txt", stringsAsFactors=FALSE)
+#file.remove("Ogril1_clean_count.txt")
+
+colnames(Ogril.cnts)<- sub("X.gpfs.data.drand.O_grillus_genomic_resources.Bam_files_Ogril1_clean.","",colnames(Ogril.cnts))
+colnames(Ogril.cnts)<- sub(".bam","",colnames(Ogril.cnts))
+
+#GitHub link to main annotation file "Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt as raw text file:
+#https://raw.githubusercontent.com/DavidRandLab/Amphipod-host-parasite-genomics/main/Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt
+
+geneinfo<- read.delim('https://raw.githubusercontent.com/DavidRandLab/Amphipod-host-parasite-genomics/main/Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt', stringsAsFactors=FALSE)
+#file.remove('Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt')
+
+# rename columns to match cluster file names 
+colnames(Ogril.cnts)<- sub(".noHWD.bam","",colnames(Ogril.cnts))
+
+infection.status <- colnames(Ogril.cnts)
+infection.status<- str_extract(infection.status,pattern = 'uninf')
+infection.status[is.na(infection.status)] = 'inf'
+pdata = data.frame(colnames(Ogril.cnts), infection.status)
+```
+
+### Filtering counts 
+
+```{r filter counts}
+# New method, 
+keep <- filterByExpr(Ogril.cnts,group = infection.status)
+Ogril.cnts <- Ogril.cnts[keep,] 
+
+```
+
+## Main differential expression analysis
+
+### Contrasts
+
+```{r message=FALSE, warning=FALSE}
+y<- DGEList(counts = as.matrix(Ogril.cnts),samples = pdata) 
+
+##### DE between Clusters ####
+design <- model.matrix( ~0 + infection.status, data = pdata) 
+
+
+y <- estimateDisp(y,design)
+fit <- glmQLFit(y, design, robust=TRUE)
+
+```
+
+##### DE between Infection Status 
+```{r warning=FALSE, paged.print=TRUE}
+
+
+ my.contrasts <- makeContrasts( infection = (infection.statusinf) - (infection.statusuninf), levels = design)
+
+
+resIf_edgeR <- glmQLFTest(fit,contrast = my.contrasts[,"infection"]) %>%
+  topTags(n=dim(y)[1])
+  
+saveRDS(resIf_edgeR,'Rdata/resIf_edgeR.RDS')
+# This line failed to write file in GitHub edgeR/Rdata/resIf_edgeR.RDS.  Need to write to a folder (Rdata) in working directory
+
+
+DEtable_InfectionStatus_Genome_edgeR <- resIf_edgeR$table %>%
+  as_tibble(rownames = 'PredictedGene') %>%
+  dplyr::filter( FDR <= FDR.CUT, abs(logFC) > LFC.CUT) %>%
+  dplyr::mutate(FlyOrhtolog = getFLY(PredictedGene)) %>%
+  dplyr::select(FlyOrhtolog, everything())
+
+DEtable_InfectionStatus_Genome_edgeR %>%
+  data.frame()
+
+# write to csv 
+
+DEtable_InfectionStatus_Genome_edgeR %>%
+write_csv('DEtable_InfectionStatus_Genome_edgeR.csv')
+#upload_sheets('DEtable_InfectionStatus_Genome_edgeR', path = as_id('https://drive.google.com/open?id=1O7WmQPs2xpF8pXM2_Wo5kIFvR7raG7-D'))
+
+```
+
+Volacano Plot
+
+```{r warning=FALSE}
+
+
+EnhancedVolcano(resIf_edgeR$table,
+                lab =getFLY(row.names(resIf_edgeR$table)),
+                x = 'logFC',
+                subtitle = '',
+                caption = '',
+                gridlines.major=F,
+                gridlines.minor=F,
+                colAlpha = .3,
+                col=c("black", "black", "black", "goldenrod"),
+                labSize = 1.5,
+                labCol = 'grey10',
+                legendPosition = 'none',pCutoff = 0.05,
+                title = 'edgeR: Infected vs Uninfected',
+                y = 'FDR')
+
+ggsave('InfectionStatus_Genome_edgeR.png', device = 'png', dpi = 300)
+#upload_file('InfectionStatus_Genome_edgeR.png',path = as_id('https://drive.google.com/open?id=1RKjadyO03X0SQh9-9hJQEjO0iMRp68MY'))
+```
+
+Gene Ontology
+
+Up Genes
+```{r }
+
+GO_upGenes_InfectionStatus_Genome_edgeR<- DEtable_InfectionStatus_Genome_edgeR %>%
+  dplyr::filter(FDR <= FDR.CUT, logFC > LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat()
+
+GO_upGenes_InfectionStatus_Genome_edgeR %>%
+  data.frame()
+
+GO_upGenes_InfectionStatus_Genome_edgeR %>%
+write_csv('GO_upGenes_InfectionStatus_Genome_edgeR.csv')
+#upload_sheets('GO_upGenes_InfectionStatus_Genome_edgeR', path = as_id('https://drive.google.com/open?id=1O7WmQPs2xpF8pXM2_Wo5kIFvR7raG7-D'))
+
+```
+Down Genes
+
+```{r }
+
+GO_downGenes_InfectionStatus_Genome_edgeR <- DEtable_InfectionStatus_Genome_edgeR %>%
+  dplyr::filter(FDR <= FDR.CUT, logFC < -1*LFC.CUT) %>%
+  pull(PredictedGene) %>%
+  GOamnat()
+
+
+GO_downGenes_InfectionStatus_Genome_edgeR %>%
+  data.frame()
+
+GO_downGenes_InfectionStatus_Genome_edgeR %>%
+write_csv('GO_downGenes_InfectionStatus_Genome_edgeR.csv')
+#upload_sheets('GO_downGenes_InfectionStatus_Genome_edgeR', path = as_id('https://drive.google.com/open?id=1O7WmQPs2xpF8pXM2_Wo5kIFvR7raG7-D'))
+
+```
+
+
+```{r fig.height=12, fig.width=8}
+colp <- c(up = 'darkred', down = 'darkblue')
+
+GO_downGenes_InfectionStatus_Genome_edgeR %>%
+  add_column(Direction = 'down') %>%
+  bind_rows(GO_upGenes_InfectionStatus_Genome_edgeR %>%
+              add_column(Direction = 'up'),
+             .id = 'direction') %>%
+  arrange(desc(over_represented_pvalue)) %>% 
+  mutate(term = factor(term, levels = term)) %>%
+  
+  mutate(over_represented_pvalue = log10(over_represented_pvalue)) %>%
+    mutate(scaling = if_else(Direction == 'down',1,-1)) %>%
+    mutate(padj = over_represented_pvalue * scaling) %>%
+    arrange(desc(padj)) %>%
+
+    ggplot(aes(fct_reorder(term, padj), padj, fill = Direction)) +
+    geom_bar(stat = 'identity') +
+    scale_fill_manual(values = colp)+
+    ylab('log10 FDR')+ xlab('Ontology') +
+    coord_flip()+
+    ggtitle('edgeR: Gene Ontology') +
+    theme_pubr()
+
+
+ggsave('GO_InfectionStatus_Genome_edgeR.png', device = 'png', dpi = 300)
+#upload_file('GO_InfectionStatus_Genome_edgeR.png',path = as_id('https://drive.google.com/open?id=1RKjadyO03X0SQh9-9hJQEjO0iMRp68MY'))
+```
+
+```{r }
+
+#Reactome code needs fixing: Error in h(simpleError(msg, call)) : error in evaluating the argument 'x' in selecting a method for function 'as.data.frame': could not find function "enrichPathway"
+
+ReactomeTable_InfectionStatus_Genome_edgeR<- DEtable_InfectionStatus_Genome_edgeR %>%
+  pull(PredictedGene) %>%
+  reactome.amnat() %>%
+  as.data.frame()
+
+ReactomeTable_InfectionStatus_Genome_edgeR
+
+ReactomeTable_InfectionStatus_Genome_edgeR %>%
+write_csv('ReactomeTable_InfectionStatus_Genome_edgeR.csv')
+#upload_sheets('ReactomeTable_InfectionStatus_Genome_edgeR', path = as_id('https://drive.google.com/open?id=1O7WmQPs2xpF8pXM2_Wo5kIFvR7raG7-D'))
+
+```
+
+
+```{r eval=FALSE, include=FALSE}
+GO_downGenes_InfectionStatus_Genome_edgeR %>%
+  add_column(Direction = 'down') %>%
+  bind_rows(GO_upGenes_InfectionStatus_Genome_edgeR %>%
+              add_column(Direction = 'up'),
+             .id = 'direction') %>%
+  arrange(desc(over_represented_pvalue)) %>%
+  mutate(padj = over_represented_pvalue) %>%
+  go.trim() -> slimmed
+ 
+slimmed
+
+slimmed %>%
+write_csv('GO_downGenes_InfectionStatus_Genome_edgeR.csv')
+#upload_sheets('GO_slimmed_InfectionStatus_Genome_edgeR', path = as_id('https://drive.google.com/open?id=1l-FTWGEgtXl8B7MD6V-iQZTrQhqmoqde'))
+
+
+slimmed %>%
+  ggplot(aes(x = fct_reorder(Term, Count), y = Count )) +
+  geom_bar(stat = 'identity') +
+  xlab("Slimmed Ontology Terms")+
+  coord_flip() +
+  theme_pubr()
+
+ggsave('GO_slimmed_InfectionStatus_Genome_edgeR.png', device = 'png', dpi = 300)
+#upload_file('GO_slimmed_InfectionStatus_Genome_edgeR.png',path = as_id('https://drive.google.com/open?id=1qKn5sLGuNPvw0EhRQZVN-rAEwhiEHsAG'))
+```
+
+
