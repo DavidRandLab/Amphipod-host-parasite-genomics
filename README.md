@@ -5,7 +5,9 @@ The files in this GitHub site support the analyses in the manuscript “Parasite
 The genomic data consist of an assembly of the amphipod (Orchestia grillus) nuclear genome from paired end DNA Illumina reads. The transcriptome data consist of 48 individual paired end Illumina RNAseq reads from 24 amphipods infected with the trematode Levinseniella byrdi and 24 uninfected individuals. 
 
 The data for this paper can be downloaded from NCBI using the following accession IDs:
+
 The RNA samples are in BioProject: PRJNA557566; SRAs: SRR9870971-SRR9870986
+
 The genome is in BioProject: PRJNA557538; GeneBank: VOMN00000000
 
 The genome assembly code is in the Genome_Assembly folder. 
@@ -23,4 +25,3 @@ The Functions folder contains code for several functions that are called from ot
 Older versions of these scripts are in the DE_Analysis folder.
 
 The Figures folder contains code for generating some of the figures; other figures are generated in the individual R scripts for differential expression.
-
