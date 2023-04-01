@@ -8,15 +8,15 @@ The data for this paper can be downloaded from NCBI using the following accessio
 The RNA samples are in BioProject: PRJNA557566; SRAs: SRR9870971-SRR9870986
 The genome is in BioProject: PRJNA557538; GeneBank: VOMN00000000
 
-The genome assembly code is in the Genome_Assembly folder
-The read mapping code is in the Map_w_STAR folder
+The genome assembly code is in the Genome_Assembly folder. 
+The read mapping code is in the Map_w_STAR folder. 
 Gene models for the transcriptional analysis were developed from homology to Drosophila melanogaster to take advantage of gene ontology (GO) annotations. 
-The gene models are contained in the gene_models folder
+The gene models are contained in the gene_models folder. 
 
 The differential expression analyses were conducted with three different R packages: DEseq2, EBseq and edgeR. The R scripts for each of those analyses are in their respective folders. Each script uses the same read-count file and the same master annotation file specifying the gene models: 
-Ogril1_clean_count.txt
-Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt
-These files are located in the main GitHub folder and are called from each R script as the URL for the raw text contained in each file.
+Ogril1_clean_count.txt 
+Ogril1_RNAevidence_MASTER_ANNOTATION_FILE.txt 
+These files are located in the main GitHub folder and are called from each R script as the URL for the raw text contained in each file. 
 
 The Functions folder contains code for several functions that are called from other scripts in other directories. 
 
